@@ -67,6 +67,62 @@
 
 #![no_std]
 
+mod ral_edma3_edma4;
+
+/// DMAs for the RT118x series.
+pub mod rt1180 {
+    use crate::{
+        interrupt::{SharedWaker, NO_WAKER},
+        ral::Static,
+        ral_edma3_edma4::{self, edma4},
+    };
+
+    /// eDMA3, 32 channels.
+    pub struct EDMA3 {
+        dma: Static<edma4::RegisterBlock<false>>,
+        tcd: Static<ral_edma3_edma4::tcd_block::RegisterBlock<32>>,
+        wakers: [SharedWaker; 32],
+    }
+
+    pub struct Channel<const WIDE: bool> {
+        /// Our channel number, expected to be between [0, 32)
+        index: usize,
+        /// Reference to the DMA registers
+        registers: Static<edma4::RegisterBlock<WIDE>>,
+        /// Reference to the DMA multiplexer
+        multiplexer: Static<dmamux::RegisterBlock>,
+        /// This channel's waker.
+        pub(crate) waker: &'static super::SharedWaker,
+    }
+
+    impl EDMA3 {
+        pub const unsafe fn new(dma: *const (), tcd: *const ()) -> Self {
+            Self {
+                dma: Static(dma.cast()),
+                tcd: Static(tcd.cast()),
+                wakers: [NO_WAKER; 32],
+            }
+        }
+    }
+
+    /// eDMA4, 64 channels.
+    pub struct EDMA4 {
+        dma: Static<edma4::RegisterBlock<true>>,
+        tcd: Static<ral_edma3_edma4::tcd_block::RegisterBlock<64>>,
+        wakers: [SharedWaker; 64],
+    }
+
+    impl EDMA4 {
+        pub const unsafe fn new(dma: *const (), tcd: *const ()) -> Self {
+            Self {
+                dma: Static(dma.cast()),
+                tcd: Static(tcd.cast()),
+                wakers: [NO_WAKER; 64],
+            }
+        }
+    }
+}
+
 pub mod channel;
 mod element;
 mod error;
