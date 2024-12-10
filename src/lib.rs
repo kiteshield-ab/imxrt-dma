@@ -11,7 +11,7 @@
 //!
 //! # Getting started
 //!
-//! To allocate a [`Dma`](crate::Dma) driver, you'll need to know
+//! To allocate a [`Dma`] driver, you'll need to know
 //!
 //! 1. the location of the DMA controller registers.
 //! 2. the location of the DMAMUX registers.
@@ -26,12 +26,12 @@
 //! object to create DMA [`Channel`](crate::channel::Channel)s.
 //!
 //! ```
-//! use imxrt_dma::Dma;
+//! use imxrt_dma::DMA;
 //! # const DMA_PTR: *const () = core::ptr::null() as _;
 //! # const DMAMUX_PTR: *const () = core::ptr::null() as  _;
 //!
 //! // Safety: addresses and channel count are valid for this target.
-//! static DMA: Dma<32> = unsafe { Dma::new(DMA_PTR, DMAMUX_PTR) };
+//! static DMA: DMA<32> = unsafe { DMA::new(DMA_PTR, DMAMUX_PTR) };
 //!
 //! // Safety: we only allocate one DMA channel 7 object.
 //! let mut channel = unsafe { DMA.channel(7) };
@@ -47,9 +47,9 @@
 //!   peripheral using a single buffer.
 //!
 //! Peripheral transfers depends on a peripheral's DMA support. These are signaled
-//! through various [`peripheral`](crate::peripheral) traits.
+//! through various [`peripheral`] traits.
 //!
-//! For a lower-level API, use the [`channel`](crate::channel) objects and helper
+//! For a lower-level API, use the [`channel`] objects and helper
 //! functions.
 //!
 //! ### License
@@ -83,6 +83,26 @@ pub use ral::tcd::BandwidthControl;
 /// A DMA result
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// eDMA helper.
+#[cfg(not(feature = "edma34"))]
+pub type DMA<const N: usize> = Dma<N, ral::dma::edma::RegisterBlock>;
+/// eDMA channel helper.
+#[cfg(not(feature = "edma34"))]
+pub type DMAChannel = channel::Channel;
+
+/// eDMA3 helper.
+#[cfg(feature = "edma34")]
+pub type DMA3 = Dma<32, ral::dma::edma3::RegisterBlock>;
+/// eDMA3 channel helper.
+#[cfg(feature = "edma34")]
+pub type DMA3Channel = channel::Channel<ral::dma::edma3::RegisterBlock>;
+/// eDMA4 helper.
+#[cfg(feature = "edma34")]
+pub type DMA4 = Dma<64, ral::dma::edma4::RegisterBlock>;
+/// eDMA4 channel helper.
+#[cfg(feature = "edma34")]
+pub type DMA4Channel = channel::Channel<ral::dma::edma4::RegisterBlock>;
+
 /// A DMA driver.
 ///
 /// This DMA driver manages the DMA controller and the multiplexer.
@@ -90,17 +110,17 @@ pub type Result<T> = core::result::Result<T, Error>;
 ///
 /// `Dma` allocates [`Channel`](channel::Channel)s. `Channel` provides
 /// the interface for scheduling transfers.
-pub struct Dma<const CHANNELS: usize> {
-    controller: ral::Kind,
+pub struct Dma<const CHANNELS: usize, DmaPeripheral> {
+    controller: ral::Static<DmaPeripheral>,
     #[cfg(not(feature = "edma34"))]
     multiplexer: ral::Static<ral::dmamux::RegisterBlock>,
     wakers: [SharedWaker; CHANNELS],
 }
 
 // Safety: OK to allocate a DMA driver in a static context.
-unsafe impl<const CHANNELS: usize> Sync for Dma<CHANNELS> {}
+unsafe impl<const CHANNELS: usize, DmaPeripheral> Sync for Dma<CHANNELS, DmaPeripheral> {}
 
-impl<const CHANNELS: usize> Dma<CHANNELS> {
+impl<const CHANNELS: usize, DmaPeripheral> Dma<CHANNELS, DmaPeripheral> {
     /// Create the DMA driver.
     ///
     /// Note that this can evaluate at compile time. Consider using this to
@@ -121,9 +141,12 @@ impl<const CHANNELS: usize> Dma<CHANNELS> {
     /// allocating channels. This may result in DMA channels that point to
     /// invalid memory.
     #[cfg(not(feature = "edma34"))]
-    pub const unsafe fn new(controller: *const (), multiplexer: *const ()) -> Self {
-        Self {
-            controller: ral::Kind::EDma(ral::Static(controller.cast())),
+    pub const unsafe fn new(
+        controller: *const (),
+        multiplexer: *const (),
+    ) -> Dma<CHANNELS, ral::dma::edma::RegisterBlock> {
+        Dma {
+            controller: ral::Static(controller.cast()),
             multiplexer: ral::Static(multiplexer.cast()),
             wakers: [NO_WAKER; CHANNELS],
         }
@@ -133,28 +156,45 @@ impl<const CHANNELS: usize> Dma<CHANNELS> {
     ///
     /// # Safety
     ///
-    /// TODO
+    /// Caller must make sure that `controller` is a pointer to the start of the
+    /// DMA3 controller register block.
+    ///
+    /// An incorrect `CHANNELS` value prevents proper bounds checking when
+    /// allocating channels. This may result in DMA channels that point to
+    /// invalid memory.
     #[cfg(feature = "edma34")]
-    pub const unsafe fn new_edma3(controller: *const ()) -> Self {
-        Self {
-            controller: ral::Kind::EDma3(ral::Static(controller.cast())),
+    pub const unsafe fn new_edma3(
+        controller: *const ral::dma::edma3::RegisterBlock,
+    ) -> Dma<CHANNELS, ral::dma::edma3::RegisterBlock> {
+        Dma {
+            controller: ral::Static(controller),
             wakers: [NO_WAKER; CHANNELS],
         }
     }
 
-    /// Create an eDMA3 driver.
+    /// Create an eDMA4 driver.
     ///
     /// # Safety
     ///
-    /// TODO
+    /// Caller must make sure that `controller` is a pointer to the start of the
+    /// DMA4 controller register block.
+    ///
+    /// An incorrect `CHANNELS` value prevents proper bounds checking when
+    /// allocating channels. This may result in DMA channels that point to
+    /// invalid memory.
     #[cfg(feature = "edma34")]
-    pub const unsafe fn new_edma4(controller: *const ()) -> Self {
-        Self {
-            controller: ral::Kind::EDma4(ral::Static(controller.cast())),
+    pub const unsafe fn new_edma4(
+        controller: *const ral::dma::edma3::RegisterBlock,
+    ) -> Dma<CHANNELS, ral::dma::edma4::RegisterBlock> {
+        Dma {
+            controller: ral::Static(controller.cast()),
             wakers: [NO_WAKER; CHANNELS],
         }
     }
+}
 
+#[cfg(feature = "edma34")]
+impl<const CHANNELS: usize> Dma<CHANNELS, ral::dma::edma3::RegisterBlock> {
     /// Propagate the ID of the bus controller through each DMA channel.
     ///
     /// This is off by default. When it's off, the DMA controller uses nonsecure
@@ -162,16 +202,31 @@ impl<const CHANNELS: usize> Dma<CHANNELS> {
     ///
     /// When it's on, each DMA channel adopts the domain ID of the bus that
     /// programs the channel. That's likely the CPU's domain ID.
+    ///
+    /// # Safety
+    ///
+    /// TODO
+    pub unsafe fn set_global_id_replication(&self, enable: bool) {
+        ral::modify_reg!(ral::dma::edma3, self.controller, CSR, GMRC: enable as u32);
+    }
+}
+
+#[cfg(feature = "edma34")]
+impl<const CHANNELS: usize> Dma<CHANNELS, ral::dma::edma4::RegisterBlock> {
+    /// Propagate the ID of the bus controller through each DMA channel.
+    ///
+    /// This is off by default. When it's off, the DMA controller uses nonsecure
+    /// privilege to perform transfers.
+    ///
+    /// When it's on, each DMA channel adopts the domain ID of the bus that
+    /// programs the channel. That's likely the CPU's domain ID.
+    ///
+    /// # Safety
+    ///
+    /// TODO
     #[cfg(feature = "edma34")]
     pub unsafe fn set_global_id_replication(&self, enable: bool) {
-        match &self.controller {
-            ral::Kind::EDma3(edma3) => {
-                ral::modify_reg!(ral::dma::edma3, edma3, CSR, GMRC: enable as u32)
-            }
-            ral::Kind::EDma4(edma4) => {
-                ral::modify_reg!(ral::dma::edma4, edma4, CSR, GMRC: enable as u32)
-            }
-        }
+        ral::modify_reg!(ral::dma::edma4, self.controller, CSR, GMRC: enable as u32);
     }
 }
 

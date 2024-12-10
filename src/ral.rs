@@ -41,23 +41,3 @@ impl<T> Clone for Static<T> {
     }
 }
 impl<T> Copy for Static<T> {}
-
-/// Manages the kind of eDMA peripheral we're using.
-///
-/// I'd hope that the compiler can remove any runtime
-/// dispatch when there's only one variant. But I'm
-/// writing this without measuring that claim.
-///
-/// We'll likely need runtime dispatch for 1180 eDMA3
-/// and eDMA4 selection (unless we adopt some kind of
-/// type state). Let's make that the default repr
-/// of our problem.
-#[derive(Clone, Copy)]
-pub(crate) enum Kind {
-    #[cfg(not(feature = "edma34"))]
-    EDma(Static<dma::edma::RegisterBlock>),
-    #[cfg(feature = "edma34")]
-    EDma3(Static<dma::edma3::RegisterBlock>),
-    #[cfg(feature = "edma34")]
-    EDma4(Static<dma::edma4::RegisterBlock>),
-}

@@ -1,11 +1,13 @@
 //! Channel definitions, implementation, for eDMA3 / eDMA4.
 
-use crate::ral::{self, Kind};
+use cortex_m::interrupt;
+
+use crate::ral::{self, dma, Static};
 use crate::{Error, SharedWaker};
 
-use super::Configuration;
+use super::{Configuration, DmaChannel};
 
-impl<const CHANNELS: usize> crate::Dma<CHANNELS> {
+impl<const CHANNELS: usize> crate::Dma<CHANNELS, dma::edma3::RegisterBlock> {
     /// Creates the DMA channel described by `index`.
     ///
     /// # Safety
@@ -17,7 +19,29 @@ impl<const CHANNELS: usize> crate::Dma<CHANNELS> {
     /// # Panics
     ///
     /// Panics if `index` is greater than or equal to the maximum number of channels.
-    pub unsafe fn channel(&'static self, index: usize) -> Channel {
+    pub unsafe fn channel(&'static self, index: usize) -> Channel<dma::edma3::RegisterBlock> {
+        assert!(index < CHANNELS);
+        Channel {
+            index,
+            registers: self.controller,
+            waker: &self.wakers[index],
+        }
+    }
+}
+
+impl<const CHANNELS: usize> crate::Dma<CHANNELS, dma::edma4::RegisterBlock> {
+    /// Creates the DMA channel described by `index`.
+    ///
+    /// # Safety
+    ///
+    /// This will create a handle that may alias global, mutable state. You should only create
+    /// one channel per index. If there are multiple channels for the same index, you're
+    /// responsible for ensuring synchronized access.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is greater than or equal to the maximum number of channels.
+    pub unsafe fn channel(&'static self, index: usize) -> Channel<dma::edma4::RegisterBlock> {
         assert!(index < CHANNELS);
         Channel {
             index,
@@ -34,120 +58,185 @@ impl<const CHANNELS: usize> crate::Dma<CHANNELS> {
 ///
 /// The `Channel` stores memory addresses independent of the memory lifetime. You must make
 /// sure that the channel's state is valid before enabling a transfer!
-pub struct Channel {
+pub struct Channel<DmaPeripheral> {
     /// Our channel number, expected to be between [0, 32)
     pub(super) index: usize,
     /// Reference to the DMA registers
-    registers: Kind,
+    registers: Static<DmaPeripheral>,
     /// This channel's waker.
     pub(crate) waker: &'static SharedWaker,
 }
 
-impl Channel {
-    pub(super) fn enable_impl(&self) {
+// It's OK to send a channel across an execution context.
+// They can't be cloned or copied, so there's no chance of
+// them being (mutably) shared.
+unsafe impl<T> Send for Channel<T> {}
+
+/// Specifics needed for eDMA3/4.
+pub trait Dma3Dma4Specifics {
+    /// Get the registers of the specific channel.
+    fn channel_registers(&self, index: usize) -> &ral::tcd::edma34::RegisterBlock;
+
+    /// DMA dependent hardware signaling check.
+    fn is_hardware_signaling(&self, index: usize) -> bool;
+}
+
+impl<DmaPeripheral> DmaChannel for Channel<DmaPeripheral>
+where
+    DmaPeripheral: Dma3Dma4Specifics,
+{
+    /// Returns a handle to this channel's transfer control descriptor.
+    fn tcd(&self) -> &crate::ral::tcd::RegisterBlock {
+        &self.registers.channel_registers(self.index).TCD
+    }
+
+    fn is_hardware_signaling(&self) -> bool {
+        self.registers.is_hardware_signaling(self.index)
+    }
+
+    unsafe fn enable(&self) {
         // eDMA3/4: dispatch to the TCD CHn_CSR. RMW on bit
         // 0 to enable. Immutable write still OK: channel
         // deemed unique, and it should be !Sync.
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::modify_reg!(crate::ral::tcd::edma34, chan, CSR, ERQ: 1);
     }
 
-    fn channel_registers(&self) -> &ral::tcd::edma34::RegisterBlock {
-        match &self.registers {
-            Kind::EDma3(edma3) => &edma3.TCD[self.index],
-            Kind::EDma4(edma4) => &edma4.TCD[self.index],
-        }
-    }
-
-    /// Returns a handle to this channel's transfer control descriptor.
-    pub(super) fn tcd(&self) -> &crate::ral::tcd::RegisterBlock {
-        match &self.registers {
-            Kind::EDma3(edma3) => &edma3.TCD[self.index].TCD,
-            Kind::EDma4(edma4) => &edma4.TCD[self.index].TCD,
-        }
-    }
-
-    pub(super) fn set_channel_configuration_impl(&mut self, configuration: Configuration) {
+    fn set_channel_configuration(&mut self, configuration: Configuration) {
         let source = match configuration {
             Configuration::Off => 0,
             Configuration::Enable { source } => source,
         };
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::write_reg!(crate::ral::tcd::edma34, chan, MUX, source);
     }
 
-    pub(super) fn is_hardware_signaling_impl(&self) -> bool {
-        match &self.registers {
-            Kind::EDma3(edma3) => edma3.HRS.read() & 1 << self.index != 0,
-            Kind::EDma4(edma4) if self.index < 32 => edma4.HRS_LOW.read() & 1 << self.index != 0,
-            Kind::EDma4(edma4) if (32..64).contains(&self.index) => {
-                edma4.HRS_HIGH.read() & 1 << (self.index - 32) != 0
-            }
-            _ => unreachable!("Driver guarantees that index is always in bounds"),
-        }
-    }
-
-    pub(super) fn disable_impl(&self) {
+    fn disable(&self) {
         // eDMA3/4: see notes in enable. RMW to set bit 0 low.
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::modify_reg!(crate::ral::tcd::edma34, chan, CSR, ERQ: 0);
     }
 
-    pub(super) fn is_interrupt_impl(&self) -> bool {
+    fn is_interrupt(&self) -> bool {
         // eDMA3/4: Each channel has a W1C interrupt bit.
         // Prefer that instead of the aggregate register(s)
         // in the MP space.
-        self.channel_registers().INT.read() != 0
+        self.registers.channel_registers(self.index).INT.read() != 0
     }
 
-    pub(super) fn clear_interrupt_impl(&self) {
+    fn clear_interrupt(&self) {
         // eDMA3/4: See note in is_interrupt.
-        self.channel_registers().INT.write(1);
+        self.registers.channel_registers(self.index).INT.write(1);
     }
 
-    pub(super) fn is_complete_impl(&self) -> bool {
+    fn is_complete(&self) -> bool {
         // eDMA3/4: Need to check CHn_CSR in the TCD space.
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::read_reg!(crate::ral::tcd::edma34, chan, CSR, DONE == 1)
     }
 
-    pub(super) fn clear_complete_impl(&self) {
+    fn clear_complete(&self) {
         // eDMA3/4: Need to change a CHn_CSR bit in the TCD space.
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::modify_reg!(crate::ral::tcd::edma34, chan, CSR, DONE: 1);
     }
 
-    pub(super) fn is_error_impl(&self) -> bool {
+    fn is_error(&self) -> bool {
         // eDMA3/4: Check CHn_ES, highest bit.
-        self.channel_registers().ES.read() != 0
+        self.registers.channel_registers(self.index).ES.read() != 0
     }
 
-    pub(super) fn clear_error_impl(&self) {
+    fn clear_error(&self) {
         // eDMA3/4: W1C CHn_ES, highest bit.
-        self.channel_registers().ES.write(1 << 31);
+        self.registers
+            .channel_registers(self.index)
+            .ES
+            .write(1 << 31);
     }
 
-    pub(super) fn is_active_impl(&self) -> bool {
+    fn is_active(&self) -> bool {
         // eDMA3/4: Check CHn_CSR, highest bit.
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::read_reg!(crate::ral::tcd::edma34, chan, CSR, ACTIVE == 1)
     }
 
-    pub(super) fn is_enabled_impl(&self) -> bool {
+    fn is_enabled(&self) -> bool {
         // eDMA3/4: Check CHn_CSR, lowest bit.
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::read_reg!(crate::ral::tcd::edma34, chan, CSR, ERQ == 1)
     }
 
-    pub(super) fn error_status_impl(&self) -> Error {
-        Error::new(self.channel_registers().ES.read())
+    fn error_status(&self) -> Error {
+        Error::new(self.registers.channel_registers(self.index).ES.read())
+    }
+
+    fn channel(&self) -> usize {
+        self.index
+    }
+
+    fn waker(&self) -> &SharedWaker {
+        self.waker
+    }
+}
+
+impl<DmaPeripheral> Channel<DmaPeripheral>
+where
+    DmaPeripheral: Dma3Dma4Specifics,
+{
+    /// Handle a DMA channel interrupt (TODO: Fix this docs)
+    ///
+    /// Checks the interrupt status for the channel identified by `channel`.
+    /// If the channel completed its transfer, `on_interrupt` wakes the channel's
+    /// waker.
+    ///
+    /// Consider calling `on_interrupt` in a DMA channel's interrupt handler:
+    ///
+    /// ```
+    /// use imxrt_dma::Dma;
+    /// static DMA: Dma<32> = // Handle to DMA driver.
+    /// # unsafe { Dma::new(core::ptr::null(), core::ptr::null()) };
+    ///
+    /// // #[cortex_m_rt::interrupt]
+    /// fn DMA7_DMA23() {
+    ///     // Safety: only checking channels 7 and 23, which
+    ///     // are both valid on an i.MX RT 1060 chip.
+    ///     unsafe {
+    ///         DMA.on_interrupt(7);
+    ///         DMA.on_interrupt(23);
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// This should only be used when the associated DMA channel is exclusively referenced
+    /// by a DMA transfer future. Caller must ensure that `on_interrupt` is called in
+    /// the correct interrupt handler.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `channel` is greater than or equal to the maximum number of channels.
+    pub unsafe fn on_interrupt(&self) {
+        if self.is_interrupt() {
+            self.clear_interrupt();
+        }
+
+        if self.is_complete() | self.is_error() {
+            interrupt::free(|cs| {
+                let waker = self.waker.borrow(cs);
+                let mut waker = waker.borrow_mut();
+                if let Some(waker) = waker.take() {
+                    waker.wake();
+                }
+            });
+        }
     }
 
     /// Adopt and use the domain ID of the bus controller to perform access.
     ///
     /// Only matters if the global ID replication is enabled in the DMA controller.
     pub fn set_id_replication(&mut self, enable: bool) {
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::modify_reg!(crate::ral::tcd::edma34, chan, SBR, EMI: enable as u32);
     }
 
@@ -156,7 +245,7 @@ impl Channel {
     /// If not enabled, the privilege level is nonprivilaged, or
     /// "user protection."
     pub fn set_privilege_protection(&mut self, enable: bool) {
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::modify_reg!(crate::ral::tcd::edma34, chan, SBR, PAL: enable as u32);
     }
 
@@ -164,7 +253,35 @@ impl Channel {
     ///
     /// If not enabled, accesses adopt nonsecure protection.
     pub fn set_secure_protection(&mut self, enable: bool) {
-        let chan = self.channel_registers();
+        let chan = self.registers.channel_registers(self.index);
         ral::modify_reg!(crate::ral::tcd::edma34, chan, SBR, SEC: enable as u32);
+    }
+}
+
+//
+// Specifics for DMA3 and DMA4.
+//
+
+impl Dma3Dma4Specifics for dma::edma3::RegisterBlock {
+    fn channel_registers(&self, index: usize) -> &ral::tcd::edma34::RegisterBlock {
+        &self.TCD[index]
+    }
+
+    fn is_hardware_signaling(&self, index: usize) -> bool {
+        self.HRS.read() & 1 << index != 0
+    }
+}
+
+impl Dma3Dma4Specifics for dma::edma4::RegisterBlock {
+    fn channel_registers(&self, index: usize) -> &ral::tcd::edma34::RegisterBlock {
+        &self.TCD[index]
+    }
+
+    fn is_hardware_signaling(&self, index: usize) -> bool {
+        if index < 32 {
+            self.HRS_LOW.read() & 1 << index != 0
+        } else {
+            self.HRS_HIGH.read() & 1 << (index - 32) != 0
+        }
     }
 }

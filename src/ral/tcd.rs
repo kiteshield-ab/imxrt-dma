@@ -270,7 +270,7 @@ pub(crate) mod edma34 {
     use super::RWRegister;
 
     #[repr(C, align(32))]
-    pub(crate) struct RegisterBlock {
+    pub struct RegisterBlock {
         pub CSR: RWRegister<u32>,
         pub ES: RWRegister<u32>,
         pub INT: RWRegister<u32>,

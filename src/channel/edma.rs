@@ -2,10 +2,11 @@
 
 use crate::ral::{self, dmamux, tcd::BandwidthControl, Static};
 use crate::{Error, SharedWaker};
+use cortex_m::interrupt;
 
-use super::Configuration;
+use super::{Configuration, DmaChannel};
 
-impl<const CHANNELS: usize> crate::Dma<CHANNELS> {
+impl<const CHANNELS: usize> crate::Dma<CHANNELS, ral::dma::edma::RegisterBlock> {
     /// Creates the DMA channel described by `index`.
     ///
     /// # Safety
@@ -21,9 +22,7 @@ impl<const CHANNELS: usize> crate::Dma<CHANNELS> {
         assert!(index < CHANNELS);
         Channel {
             index,
-            registers: match self.controller {
-                crate::ral::Kind::EDma(registers) => registers,
-            },
+            registers: self.controller,
             multiplexer: self.multiplexer,
             waker: &self.wakers[index],
         }
@@ -48,16 +47,12 @@ pub struct Channel {
     pub(crate) waker: &'static SharedWaker,
 }
 
+// It's OK to send a channel across an execution context.
+// They can't be cloned or copied, so there's no chance of
+// them being (mutably) shared.
+unsafe impl Send for Channel {}
+
 impl Channel {
-    pub(super) fn enable_impl(&self) {
-        // Immutable write OK. No other methods directly modify ERQ.
-        self.registers.SERQ.write(self.index as u8);
-    }
-
-    pub(super) fn tcd(&self) -> &crate::ral::tcd::RegisterBlock {
-        &self.registers.TCD[self.index]
-    }
-
     /// Set the channel's bandwidth control
     ///
     /// - `None` disables bandwidth control (default setting)
@@ -70,7 +65,67 @@ impl Channel {
         crate::ral::modify_reg!(crate::ral::tcd, tcd, CSR, BWC: raw);
     }
 
-    pub(super) fn set_channel_configuration_impl(&mut self, configuration: Configuration) {
+    /// Handle a DMA channel interrupt (TODO: Fix this docs)
+    ///
+    /// Checks the interrupt status for the channel identified by `channel`.
+    /// If the channel completed its transfer, `on_interrupt` wakes the channel's
+    /// waker.
+    ///
+    /// Consider calling `on_interrupt` in a DMA channel's interrupt handler:
+    ///
+    /// ```
+    /// use imxrt_dma::DMA;
+    /// static DMA: DMA<32> = // Handle to DMA driver.
+    /// # unsafe { DMA::new(core::ptr::null(), core::ptr::null()) };
+    ///
+    /// // #[cortex_m_rt::interrupt]
+    /// fn DMA7_DMA23() {
+    ///     // Safety: only checking channels 7 and 23, which
+    ///     // are both valid on an i.MX RT 1060 chip.
+    ///     unsafe {
+    ///         DMA.channel(7).on_interrupt();
+    ///         DMA.channel(7).on_interrupt();
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// This should only be used when the associated DMA channel is exclusively referenced
+    /// by a DMA transfer future. Caller must ensure that `on_interrupt` is called in
+    /// the correct interrupt handler.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `channel` is greater than or equal to the maximum number of channels.
+    pub unsafe fn on_interrupt(&self) {
+        if self.is_interrupt() {
+            self.clear_interrupt();
+        }
+
+        if self.is_complete() | self.is_error() {
+            interrupt::free(|cs| {
+                let waker = self.waker.borrow(cs);
+                let mut waker = waker.borrow_mut();
+                if let Some(waker) = waker.take() {
+                    waker.wake();
+                }
+            });
+        }
+    }
+}
+
+impl DmaChannel for Channel {
+    unsafe fn enable(&self) {
+        // Immutable write OK. No other methods directly modify ERQ.
+        self.registers.SERQ.write(self.index as u8);
+    }
+
+    fn tcd(&self) -> &crate::ral::tcd::RegisterBlock {
+        &self.registers.TCD[self.index]
+    }
+
+    fn set_channel_configuration(&mut self, configuration: Configuration) {
         // Immutable write OK. 32-bit store on configuration register.
         // eDMA3/4: Haven't found any equivalent to "always on." Doesn't seem
         // that the periodic request via PIT will apply, either.
@@ -98,56 +153,64 @@ impl Channel {
         }
     }
 
-    pub(super) fn is_hardware_signaling_impl(&self) -> bool {
+    fn is_hardware_signaling(&self) -> bool {
         self.registers.HRS.read() & (1 << self.index) != 0
     }
 
-    pub(super) fn disable_impl(&self) {
+    fn disable(&self) {
         // Immutable write OK. No other methods directly modify ERQ.
         self.registers.CERQ.write(self.index as u8);
     }
 
-    pub(super) fn is_interrupt_impl(&self) -> bool {
+    fn is_interrupt(&self) -> bool {
         self.registers.INT.read() & (1 << self.index) != 0
     }
 
-    pub(super) fn clear_interrupt_impl(&self) {
+    fn clear_interrupt(&self) {
         // Immutable write OK. No other methods modify INT.
         self.registers.CINT.write(self.index as u8);
     }
 
-    pub(super) fn is_complete_impl(&self) -> bool {
+    fn is_complete(&self) -> bool {
         let tcd = self.tcd();
         crate::ral::read_reg!(crate::ral::tcd, tcd, CSR, DONE == 1)
     }
 
-    pub(super) fn clear_complete_impl(&self) {
+    fn clear_complete(&self) {
         // Immutable write OK. CDNE affects a bit in TCD. But, other writes to
         // TCD require &mut reference. Existence of &mut reference blocks
         // clear_complete calls.
         self.registers.CDNE.write(self.index as u8);
     }
 
-    pub(super) fn is_error_impl(&self) -> bool {
+    fn is_error(&self) -> bool {
         self.registers.ERR.read() & (1 << self.index) != 0
     }
 
-    pub(super) fn clear_error_impl(&self) {
+    fn clear_error(&self) {
         // Immutable write OK. CERR affects a bit in ERR, which is
         // not written to elsewhere.
         self.registers.CERR.write(self.index as u8);
     }
 
-    pub(super) fn is_active_impl(&self) -> bool {
+    fn is_active(&self) -> bool {
         let tcd = self.tcd();
         ral::read_reg!(crate::ral::tcd, tcd, CSR, ACTIVE == 1)
     }
 
-    pub(super) fn is_enabled_impl(&self) -> bool {
+    fn is_enabled(&self) -> bool {
         self.registers.ERQ.read() & (1 << self.index) != 0
     }
 
-    pub(super) fn error_status_impl(&self) -> Error {
+    fn error_status(&self) -> Error {
         Error::new(self.registers.ES.read())
+    }
+
+    fn channel(&self) -> usize {
+        self.index
+    }
+
+    fn waker(&self) -> &SharedWaker {
+        self.waker
     }
 }

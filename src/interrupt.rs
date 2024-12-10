@@ -1,6 +1,6 @@
 //! DMA interrupt support
 
-use crate::{channel::Channel, Error};
+use crate::{channel::DmaChannel, Error};
 use core::{
     cell::RefCell,
     future::Future,
@@ -11,59 +11,6 @@ use core::{
 };
 
 use cortex_m::interrupt::{self, Mutex};
-
-impl<const CHANNELS: usize> super::Dma<CHANNELS> {
-    /// Handle a DMA interrupt
-    ///
-    /// Checks the interrupt status for the channel identified by `channel`.
-    /// If the channel completed its transfer, `on_interrupt` wakes the channel's
-    /// waker.
-    ///
-    /// Consider calling `on_interrupt` in a DMA channel's interrupt handler:
-    ///
-    /// ```
-    /// use imxrt_dma::Dma;
-    /// static DMA: Dma<32> = // Handle to DMA driver.
-    /// # unsafe { Dma::new(core::ptr::null(), core::ptr::null()) };
-    ///
-    /// // #[cortex_m_rt::interrupt]
-    /// fn DMA7_DMA23() {
-    ///     // Safety: only checking channels 7 and 23, which
-    ///     // are both valid on an i.MX RT 1060 chip.
-    ///     unsafe {
-    ///         DMA.on_interrupt(7);
-    ///         DMA.on_interrupt(23);
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// # Safety
-    ///
-    /// This should only be used when the associated DMA channel is exclusively referenced
-    /// by a DMA transfer future. Caller must ensure that `on_interrupt` is called in
-    /// the correct interrupt handler.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `channel` is greater than or equal to the maximum number of channels.
-    #[inline(always)]
-    pub unsafe fn on_interrupt(&'static self, channel: usize) {
-        let channel = self.channel(channel);
-        if channel.is_interrupt() {
-            channel.clear_interrupt();
-        }
-
-        if channel.is_complete() | channel.is_error() {
-            interrupt::free(|cs| {
-                let waker = self.wakers[channel.channel()].borrow(cs);
-                let mut waker = waker.borrow_mut();
-                if let Some(waker) = waker.take() {
-                    waker.wake();
-                }
-            });
-        }
-    }
-}
 
 pub(crate) type SharedWaker = Mutex<RefCell<Option<Waker>>>;
 #[allow(clippy::declare_interior_mutable_const)] // Very convenient, and usage for static init deemed OK in clippy docs
@@ -77,7 +24,7 @@ pub(crate) const NO_WAKER: SharedWaker = Mutex::new(RefCell::new(None));
 ///
 /// To cancel a transfer, drop the `Transfer`.
 ///
-/// If you've enabled DMA interrupts, consider using [`on_interrupt`](crate::Dma::on_interrupt)
+/// If you've enabled DMA interrupts, consider using [`on_interrupt`](crate::channel::Channel::on_interrupt)
 /// to wake an executor when the DMA transfer completes, The interrupt interface assumes that you've
 ///
 /// - configured your channel to generate interrupts
@@ -101,7 +48,7 @@ pub(crate) const NO_WAKER: SharedWaker = Mutex::new(RefCell::new(None));
 /// ```no_run
 /// use imxrt_dma::{channel::Channel, Transfer};
 ///
-/// # static DMA: imxrt_dma::Dma<32> = unsafe { imxrt_dma::Dma::new(core::ptr::null(), core::ptr::null()) };
+/// # static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };
 /// # async fn f() -> imxrt_dma::Result<()> {
 /// let my_channel: Channel = // Acquire your channel...
 ///     # unsafe { DMA.channel(0) };
@@ -110,12 +57,15 @@ pub(crate) const NO_WAKER: SharedWaker = Mutex::new(RefCell::new(None));
 /// unsafe { Transfer::new(&my_channel) }.await?;
 /// # Ok(()) }
 /// ```
-pub struct Transfer<'a> {
+pub struct Transfer<'a, Channel: DmaChannel> {
     channel: &'a Channel,
     _pinned: PhantomPinned,
 }
 
-impl<'a> Transfer<'a> {
+impl<'a, Channel> Transfer<'a, Channel>
+where
+    Channel: DmaChannel,
+{
     /// Create a new `Transfer` that performs the DMA transfer described by `channel`
     ///
     /// # Safety
@@ -130,11 +80,14 @@ impl<'a> Transfer<'a> {
     }
 }
 
-impl Future for Transfer<'_> {
+impl<Channel> Future for Transfer<'_, Channel>
+where
+    Channel: DmaChannel,
+{
     type Output = Result<(), Error>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         interrupt::free(|cs| {
-            let waker = self.channel.waker.borrow(cs);
+            let waker = self.channel.waker().borrow(cs);
             let mut waker = waker.borrow_mut();
             *waker = Some(cx.waker().clone());
         });
@@ -161,13 +114,16 @@ impl Future for Transfer<'_> {
     }
 }
 
-impl Drop for Transfer<'_> {
+impl<Channel> Drop for Transfer<'_, Channel>
+where
+    Channel: DmaChannel,
+{
     fn drop(&mut self) {
         self.channel.disable();
         self.channel.clear_complete();
         self.channel.clear_error();
         interrupt::free(|cs| {
-            let waker = self.channel.waker.borrow(cs);
+            let waker = self.channel.waker().borrow(cs);
             let mut waker = waker.borrow_mut();
             *waker = None;
         });

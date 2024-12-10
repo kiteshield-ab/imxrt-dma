@@ -1,7 +1,7 @@
 //! DMA-powered memcpy
 
 use crate::{
-    channel::{self, Channel},
+    channel::{self, DmaChannel},
     interrupt::Transfer,
     Element, Error,
 };
@@ -15,9 +15,9 @@ use core::{
 /// A memcpy operation
 ///
 /// `Memcpy` yields when it's moved the minimum amount of elements between two linear
-/// buffers. Use the [`memcpy`](crate::memcpy::memcpy) function to define the transfer.
-pub struct Memcpy<'a, E> {
-    transfer: Transfer<'a>,
+/// buffers. Use the [`memcpy`] function to define the transfer.
+pub struct Memcpy<'a, E, Channel: DmaChannel> {
+    transfer: Transfer<'a, Channel>,
     channel: &'a Channel,
     _elem: core::marker::PhantomData<(&'a E, &'a mut E)>,
 }
@@ -25,7 +25,7 @@ pub struct Memcpy<'a, E> {
 /// Perform a DMA-powered `memcpy` between the `source` and `destination` buffers
 ///
 /// Copies the minimum number of elements between the two buffers. You're responsible
-/// for enabling any interrupts, and calling [`on_interrupt`](crate::Dma::on_interrupt)
+/// for enabling any interrupts, and calling [`on_interrupt`](crate::channel::Channel::on_interrupt)
 /// if the interrupt fires. Otherwise, you may poll the transfer until completion.
 ///
 /// # Example
@@ -34,13 +34,13 @@ pub struct Memcpy<'a, E> {
 /// the DMA channel 7 interrupt fires.
 ///
 /// ```no_run
-/// use imxrt_dma::{channel::Channel, memcpy};
+/// use imxrt_dma::{channel::{DmaChannel, Channel}, memcpy};
 ///
-/// # static DMA: imxrt_dma::Dma<32> = unsafe { imxrt_dma::Dma::new(core::ptr::null(), core::ptr::null()) };
+/// # static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };
 /// // #[cortex_m_rt::interrupt]
 /// fn DMA7() {
 ///     // Safety: DMA channel 7 valid and used by a future.
-///     unsafe { DMA.on_interrupt(7) };
+///     unsafe { DMA.channel(7).on_interrupt() };
 /// }
 ///
 /// # async fn f() -> imxrt_dma::Result<()> {
@@ -55,11 +55,11 @@ pub struct Memcpy<'a, E> {
 /// memcpy::memcpy(&source, &mut destination, &mut channel_7).await?;
 /// # Ok(()) }
 /// ```
-pub fn memcpy<'a, E: Element>(
+pub fn memcpy<'a, E: Element, Channel: DmaChannel>(
     source: &'a [E],
     destination: &'a mut [E],
     channel: &'a mut Channel,
-) -> Memcpy<'a, E> {
+) -> Memcpy<'a, E, Channel> {
     channel.disable();
 
     channel.set_disable_on_completion(true);
@@ -98,7 +98,10 @@ pub fn memcpy<'a, E: Element>(
     }
 }
 
-impl<E> Future for Memcpy<'_, E> {
+impl<E, Channel> Future for Memcpy<'_, E, Channel>
+where
+    Channel: DmaChannel,
+{
     type Output = Result<(), Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
