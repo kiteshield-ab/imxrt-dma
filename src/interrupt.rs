@@ -46,9 +46,18 @@ pub(crate) const NO_WAKER: SharedWaker = Mutex::new(RefCell::new(None));
 /// your own transfer future, you may do so.
 ///
 /// ```no_run
-/// use imxrt_dma::{channel::Channel, Transfer};
+/// use imxrt_dma::Transfer;
 ///
-/// # static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };
+#[cfg_attr(
+    feature = "edma34",
+    doc = "use imxrt_dma::DMA3Channel as Channel;",
+    doc = "# static DMA: imxrt_dma::DMA3 = unsafe { imxrt_dma::DMA3::new_edma3(core::ptr::null()) };"
+)]
+#[cfg_attr(
+    not(feature = "edma34"),
+    doc = "use imxrt_dma::channel::Channel;",
+    doc = "# static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };"
+)]
 /// # async fn f() -> imxrt_dma::Result<()> {
 /// let my_channel: Channel = // Acquire your channel...
 ///     # unsafe { DMA.channel(0) };

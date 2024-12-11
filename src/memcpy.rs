@@ -34,9 +34,18 @@ pub struct Memcpy<'a, E, Channel: DmaChannel> {
 /// the DMA channel 7 interrupt fires.
 ///
 /// ```no_run
-/// use imxrt_dma::{channel::{DmaChannel, Channel}, memcpy};
+/// use imxrt_dma::{channel::DmaChannel, memcpy};
 ///
-/// # static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };
+#[cfg_attr(
+    feature = "edma34",
+    doc = "use imxrt_dma::DMA3Channel as Channel;",
+    doc = "# static DMA: imxrt_dma::DMA3 = unsafe { imxrt_dma::DMA3::new_edma3(core::ptr::null()) };"
+)]
+#[cfg_attr(
+    not(feature = "edma34"),
+    doc = "use imxrt_dma::channel::Channel;",
+    doc = "# static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };"
+)]
 /// // #[cortex_m_rt::interrupt]
 /// fn DMA7() {
 ///     // Safety: DMA channel 7 valid and used by a future.

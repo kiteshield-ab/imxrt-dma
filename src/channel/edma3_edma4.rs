@@ -192,17 +192,17 @@ where
     /// Consider calling `on_interrupt` in a DMA channel's interrupt handler:
     ///
     /// ```
-    /// use imxrt_dma::Dma;
-    /// static DMA: Dma<32> = // Handle to DMA driver.
-    /// # unsafe { Dma::new(core::ptr::null(), core::ptr::null()) };
+    /// use imxrt_dma::DMA3;
+    /// static DMA: DMA3 = // Handle to DMA driver.
+    /// # unsafe { DMA3::new_edma3(core::ptr::null()) };
     ///
     /// // #[cortex_m_rt::interrupt]
     /// fn DMA7_DMA23() {
     ///     // Safety: only checking channels 7 and 23, which
     ///     // are both valid on an i.MX RT 1060 chip.
     ///     unsafe {
-    ///         DMA.on_interrupt(7);
-    ///         DMA.on_interrupt(23);
+    ///         DMA.channel(7).on_interrupt();
+    ///         DMA.channel(23).on_interrupt();
     ///     }
     /// }
     /// ```

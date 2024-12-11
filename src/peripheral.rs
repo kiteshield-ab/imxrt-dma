@@ -170,8 +170,17 @@ where
 /// Receive 32 bytes from a LPUART peripheral. Wake the executor when the transfer completes.
 ///
 /// ```no_run
-/// use imxrt_dma::{peripheral, channel::{DmaChannel, Channel}};
-/// # static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };
+/// use imxrt_dma::{peripheral, channel::DmaChannel};
+#[cfg_attr(
+    feature = "edma34",
+    doc = "use imxrt_dma::DMA3Channel as Channel;",
+    doc = "# static DMA: imxrt_dma::DMA3 = unsafe { imxrt_dma::DMA3::new_edma3(core::ptr::null()) };"
+)]
+#[cfg_attr(
+    not(feature = "edma34"),
+    doc = "use imxrt_dma::channel::Channel;",
+    doc = "# static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };"
+)]
 /// # struct X;
 /// # unsafe impl peripheral::Source<u8> for X {
 /// #   fn source_signal(&self) -> u32 { 0 }
@@ -297,8 +306,17 @@ where
 /// Send five bytes to a LPUART device. Wake the executor when the transfer completes.
 ///
 /// ```no_run
-/// use imxrt_dma::{peripheral, channel::{DmaChannel, Channel}};
-/// # static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };
+/// use imxrt_dma::{peripheral, channel::DmaChannel};
+#[cfg_attr(
+    feature = "edma34",
+    doc = "use imxrt_dma::DMA3Channel as Channel;",
+    doc = "# static DMA: imxrt_dma::DMA3 = unsafe { imxrt_dma::DMA3::new_edma3(core::ptr::null()) };"
+)]
+#[cfg_attr(
+    not(feature = "edma34"),
+    doc = "use imxrt_dma::channel::Channel;",
+    doc = "# static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };"
+)]
 /// # struct X;
 /// # unsafe impl peripheral::Destination<u8> for X {
 /// #   fn destination_signal(&self) -> u32 { 0 }
@@ -400,8 +418,17 @@ where
 /// after receiving the final LPSPI word.
 ///
 /// ```no_run
-/// use imxrt_dma::{peripheral, channel::{DmaChannel, Channel}};
-/// # static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };
+/// use imxrt_dma::{peripheral, channel::DmaChannel};
+#[cfg_attr(
+    feature = "edma34",
+    doc = "use imxrt_dma::DMA3Channel as Channel;",
+    doc = "# static DMA: imxrt_dma::DMA3 = unsafe { imxrt_dma::DMA3::new_edma3(core::ptr::null()) };"
+)]
+#[cfg_attr(
+    not(feature = "edma34"),
+    doc = "use imxrt_dma::channel::Channel;",
+    doc = "# static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(core::ptr::null(), core::ptr::null()) };"
+)]
 /// # struct X;
 /// # unsafe impl peripheral::Source<u32> for X {
 /// #   fn source_signal(&self) -> u32 { 0 }

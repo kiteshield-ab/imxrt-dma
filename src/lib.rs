@@ -26,12 +26,20 @@
 //! object to create DMA [`Channel`](crate::channel::Channel)s.
 //!
 //! ```
-//! use imxrt_dma::DMA;
 //! # const DMA_PTR: *const () = core::ptr::null() as _;
 //! # const DMAMUX_PTR: *const () = core::ptr::null() as  _;
 //!
 //! // Safety: addresses and channel count are valid for this target.
-//! static DMA: DMA<32> = unsafe { DMA::new(DMA_PTR, DMAMUX_PTR) };
+#![cfg_attr(
+    feature = "edma34",
+    doc = "use imxrt_dma::DMA3;",
+    doc = "static DMA: imxrt_dma::DMA3 = unsafe { imxrt_dma::DMA3::new_edma3(DMA_PTR as _) };"
+)]
+#![cfg_attr(
+    not(feature = "edma34"),
+    doc = "use imxrt_dma::DMA;",
+    doc = "static DMA: imxrt_dma::DMA<32> = unsafe { imxrt_dma::DMA::new(DMA_PTR, DMAMUX_PTR) };"
+)]
 //!
 //! // Safety: we only allocate one DMA channel 7 object.
 //! let mut channel = unsafe { DMA.channel(7) };
