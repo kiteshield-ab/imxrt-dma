@@ -56,7 +56,7 @@ pub trait DmaChannel {
     /// Only the first four DMA channels support periodic triggering from PIT timers. This method
     /// panics if `triggering` is set for the [`Enable`](crate::channel::Configuration)
     /// variant, but the channel does not support triggering.
-    fn set_channel_configuration(&mut self, configuration: Configuration);
+    fn set_channel_configuration(&self, configuration: Configuration);
 
     /// Returns `true` if the DMA channel is receiving a service signal from hardware
     fn is_hardware_signaling(&self) -> bool;

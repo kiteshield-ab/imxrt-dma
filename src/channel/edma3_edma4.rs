@@ -102,7 +102,7 @@ where
         ral::modify_reg!(crate::ral::tcd::edma34, chan, CSR, ERQ: 1);
     }
 
-    fn set_channel_configuration(&mut self, configuration: Configuration) {
+    fn set_channel_configuration(&self, configuration: Configuration) {
         let source = match configuration {
             Configuration::Off => 0,
             Configuration::Enable { source } => source,

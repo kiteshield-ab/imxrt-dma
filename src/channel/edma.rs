@@ -125,7 +125,7 @@ impl DmaChannel for Channel {
         &self.registers.TCD[self.index]
     }
 
-    fn set_channel_configuration(&mut self, configuration: Configuration) {
+    fn set_channel_configuration(&self, configuration: Configuration) {
         // Immutable write OK. 32-bit store on configuration register.
         // eDMA3/4: Haven't found any equivalent to "always on." Doesn't seem
         // that the periodic request via PIT will apply, either.

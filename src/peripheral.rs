@@ -133,6 +133,8 @@ where
     fn drop(&mut self) {
         self.source.disable_source();
         while self.channel.is_hardware_signaling() {}
+        // Clean up the MUX state, required on RT1180.
+        self.channel.set_channel_configuration(Configuration::Off);
         // Drop `transfer` to finish cancellation...
     }
 }
@@ -270,6 +272,8 @@ where
     fn drop(&mut self) {
         self.destination.disable_destination();
         while self.channel.is_hardware_signaling() {}
+        // Clean up the MUX state, required on RT1180.
+        self.channel.set_channel_configuration(Configuration::Off);
         // Drop `transfer` to finish cancellation...
     }
 }
@@ -555,6 +559,11 @@ where
         self.peripheral.disable_source();
         while self.tx_channel.is_hardware_signaling() {}
         while self.rx_channel.is_hardware_signaling() {}
+        // Clean up the MUX state, required on RT1180.
+        self.tx_channel
+            .set_channel_configuration(Configuration::Off);
+        self.rx_channel
+            .set_channel_configuration(Configuration::Off);
         // Drop the transfers to finish cancellation...
     }
 }
